@@ -214,7 +214,8 @@ def GEN_constQgeom(type, kx, Q, omega_vec):
         Ei_vec = omega_vec + k2E(kf)
         theta_vec = Q2theta(omega_vec, E2k(Ei_vec), Q)
 
-        return pd.DataFrame({ 'omega': omega_vec, 'Q': np.ones(s)*Q, 'ki': np.ones(s)*E2k(Ei_vec), 'kf': np.ones(s)*kf, 'theta': theta_vec})
+        return pd.DataFrame({ 'omega': omega_vec, 'Q': np.ones(s)*Q, 'ki': E2k(Ei_vec), 'kf': np.ones(s)*kf, 'Ei': E2k(Ei_vec), 'Ef': np.ones(s)*k2E(kf), 'theta': theta_vec})
+
     
     elif type=='direct':
         ki = kx
@@ -222,7 +223,7 @@ def GEN_constQgeom(type, kx, Q, omega_vec):
         Ef_vec = k2E(ki) - omega_vec
         theta_vec = Q2theta(omega_vec, ki, Q)
 
-        return pd.DataFrame({ 'omega': omega_vec, 'Q': np.ones(s)*Q, 'ki': np.ones(s)*ki, 'kf': E2k(Ef_vec), 'theta': theta_vec})
+        return pd.DataFrame({ 'omega': omega_vec, 'Q': np.ones(s)*Q, 'ki': np.ones(s)*ki, 'kf': E2k(Ef_vec), 'Ei': np.ones(s)*k2E(ki), 'Ef': E2k(Ef_vec), 'theta': theta_vec})
     
 
 ########################################################################################################
@@ -230,7 +231,7 @@ def GEN_constQgeom(type, kx, Q, omega_vec):
 ########################################################################################################
 
 class MS_sim:
-    def __init__(self, geom, ki:float, kf: float, theta: float, mus, S_files):
+    def __init__(self, geom, mus, S_files, ki:float, kf: float, theta: float):
         self.geom = geom
         self.ki = ki
         self.kf = kf
@@ -509,6 +510,8 @@ class MS_sim:
         self.p2 = p2
         self.k2m = k2m
         self.w2m = w2m
+        self.theta2m = np.arccos((k2m*k1m).sum(axis=1)/(np.linalg.norm(k2m, axis=1)*np.linalg.norm(k1m, axis=1)))
+        self.omega2m = omega2m
 
         self.d3m = d3m
         self.wfm = wfm
