@@ -29,10 +29,10 @@ def dqdtheta(omega, ki, theta):
     b = 2*np.sqrt(1-omega/k2E(ki))
     return ki**2/2 * b*np.sin(theta) / np.sqrt(a-b*np.cos(theta))
 
-def dthetadq(omega, ki, theta):
-    a = 2-omega/k2E(ki)
-    b = 2*np.sqrt(1-omega/k2E(ki))
-    return (ki**2/2 * b*np.sin(theta) / np.sqrt(a-b*np.cos(theta)))**-1
+def dthetadq(omega, ki, Q):
+    a = ki**2*(2-omega/k2E(ki))
+    b = 2*ki**2*np.sqrt(1-omega/k2E(ki))
+    return 2*Q/(b*np.sqrt(1-(a-Q**2)**2/b**2))
 
 
 ########################################################################################################
@@ -197,7 +197,7 @@ def ngen4Anu(geom, x_init, N):
 ### "detector" fake apertures
 dtheta = 0.01
 dphi = 0.01
-domega = .1
+domega = 0.01 #meV
 
 ### x for neutron initial generation ###
 x_init = 100 #cm
@@ -231,11 +231,12 @@ def GEN_constQgeom(type, kx, Q, omega_vec):
 ########################################################################################################
 
 class MS_sim:
-    def __init__(self, geom, mus, S_files, ki:float, kf: float, theta: float):
+    def __init__(self, geom, mus, S_files, ki:float, kf: float, theta: float, dtheta_min: float=0.01):
         self.geom = geom
         self.ki = ki
         self.kf = kf
         self.theta = theta
+        self.dtheta_min = dtheta_min
 
         #####################
         ###### Geometry #####
@@ -271,14 +272,15 @@ class MS_sim:
 
         # LOAD S(Q,E)
         self.S_mesh = np.load(S_files[0])
-        self.Q_mesh = np.load(S_files[1])
-        self.omega_mesh = np.load(S_files[2])
+        self.Q_vec = np.load(S_files[1])
+        self.omega_vec = np.load(S_files[2])
 
         # Usefull vectors
-        self.omega_vec = self.omega_mesh[0,:]
-        self.Q_vec = self.Q_mesh[:,0]
         self.dQ_vec = self.Q_vec[1]-self.Q_vec[0]
         self.domega_vec = self.omega_vec[1]-self.omega_vec[0]
+        self.Q_mesh, self.omega_mesh = np.meshgrid(self.Q_vec, self.omega_vec)
+        self.Q_mesh, self.omega_mesh = self.Q_mesh.T, self.omega_mesh.T
+
 
         # Useful object for plots
         self.S_imshow_extent = [self.omega_vec.min(),self.omega_vec.max(),self.Q_vec.max(),self.Q_vec.min()]
@@ -286,14 +288,25 @@ class MS_sim:
         ###############################################
         ##### Dynamic range for direct scattering #####
         ###############################################
-        self.Q_lowlim = lambda ki: ki * np.sqrt(2 - self.omega_vec/k2E(ki) - 2*np.sqrt(1 - self.omega_vec/k2E(ki)))
-        self.Q_uplim  = lambda ki: ki * np.sqrt(2 - self.omega_vec/k2E(ki) + 2*np.sqrt(1 - self.omega_vec/k2E(ki)))
+        self.Q_lowlim = lambda ki: ki * np.sqrt(2 - self.omega_vec/k2E(ki) - 2*np.sqrt(1 - self.omega_vec/k2E(ki))*np.cos(self.dtheta_min))
+        self.Q_uplim  = lambda ki: ki * np.sqrt(2 - self.omega_vec/k2E(ki) - 2*np.sqrt(1 - self.omega_vec/k2E(ki))*np.cos(np.pi-self.dtheta_min))
 
         ####################################
         ##### Cut of the S(Q,w) for Ei #####
         ####################################
-        self.S_mesh_cutEi = ((self.Q_mesh>self.Q_lowlim(ki)) & (self.Q_mesh<self.Q_uplim(ki))) * self.S_mesh
-        self.S_mesh_cutEi /= self.S_mesh_cutEi.sum() * self.dQ_vec*self.domega_vec
+        self.S_mask_Ei = ((self.Q_mesh>self.Q_lowlim(ki)) & (self.Q_mesh<self.Q_uplim(ki)))
+        self.S_mesh_cutEi = self.S_mask_Ei * self.S_mesh
+
+        ################################
+        ##### dthetadQ on the mesh #####
+        ################################
+        self.dthetadq_pdfEi = np.nan_to_num(dthetadq(self.omega_mesh, ki, self.Q_mesh)) * self.S_mask_Ei
+
+        ################################
+        ##### S(Q,w) normalization #####
+        ################################
+        self.sintheta_meshEi = np.nan_to_num(np.sin(Q2theta(self.omega_mesh, ki, self.Q_mesh)))
+        self.PDF_Ei = np.nan_to_num(np.sqrt(1-self.omega_mesh/self.Ei)) * self.S_mesh_cutEi / (np.nan_to_num(np.sqrt(1-self.omega_mesh/self.Ei)) *  self.S_mesh_cutEi * domega * self.dthetadq_pdfEi * self.dQ_vec * self.sintheta_meshEi * dphi).sum()
 
         ###########################
         ##### Lamber-Beer law #####
@@ -328,15 +341,11 @@ class MS_sim:
             ts = np.append(ts, np.zeros((N,2)), axis=1)
         if self.geom_type=='concave':
             pass
-
         d1 = (ts[:,1] - ts[:,0]) + (ts[:,3] - ts[:,2])
-
         # weigth update
         w1 = w0*(1-self.T_s(d1))*self.T_abs(d1)
-
         # dtp2 extraction (one for all)
         dtp2 = self.rand_LB(d1)
-
         # generate void vector
         void = np.where(dtp2<=(ts[:, 1]-ts[:, 0]), 0, ts[:,2] - ts[:,1])
 
@@ -357,7 +366,7 @@ class MS_sim:
         Q_idx = np.searchsorted(self.Q_vec, Q1s)
         omega_idx = np.searchsorted(self.omega_vec, omega1s)
 
-        w1s = w1 * self.S_mesh_cutEi[Q_idx, omega_idx] * dqdtheta(omega1s, self.ki, theta1s) * dtheta * dphi * domega
+        w1s = w1 * self.PDF_Ei[Q_idx, omega_idx] * domega * dtheta * self.sintheta_meshEi[Q_idx, omega_idx] * dphi
 
         # intercept calculation
         ts = self.inter_fromin(p1, k1s)
@@ -379,15 +388,13 @@ class MS_sim:
 
         ### EXTRACTION FROM S(q,W) ###
 
-        # dQdtheta on the mesh
-        dqdtheta_pdf = np.nan_to_num(dqdtheta(self.omega_mesh, self.ki, Q2theta(self.omega_mesh, self.ki, self.Q_mesh)))     
-
         # Probaility mesh for random choiches
-        PDF = self.S_mesh * dqdtheta_pdf # * dtheta * domega
-        PDF /= PDF.sum() # * dtheta * domega
+        W = np.nan_to_num(np.sqrt(1-self.omega_mesh/self.Ei)) * self.S_mesh_cutEi * self.dthetadq_pdfEi * self.sintheta_meshEi # * dQ_vec * domega * dphi
+        W /= W.sum()
+
 
         # Random extractions
-        is_mesh = np.random.choice(np.arange(PDF.shape[0]*PDF.shape[1]), p=PDF.reshape(-1), size=N)
+        is_mesh = np.random.choice(np.arange(W.size), p=W.reshape(-1), size=N)
 
         # Extracted scattering variables
         Q1m = self.Q_mesh.reshape(-1)[is_mesh]
@@ -455,11 +462,19 @@ class MS_sim:
         P = np.zeros(N)
 
         for b in range(N_bunch-1):
-            S_mesh_cut = ((self.Q_mesh>self.Q_lowlim(E2k(bunch[b]-dbunch/2))) & (self.Q_mesh<self.Q_uplim(E2k(bunch[b]-dbunch/2)))) * self.S_mesh
-            S_mesh_cut /= S_mesh_cut.sum() * self.dQ_vec * self.domega_vec
+            # Mask
+            mask = ((self.Q_mesh>self.Q_lowlim(E2k(bunch[b]-dbunch/2))) & (self.Q_mesh<self.Q_uplim(E2k(bunch[b]-dbunch/2))))
+            # sintheta mesh
+            sintheta_mesh = np.nan_to_num(np.sin(Q2theta(self.omega_mesh, E2k(bunch[b]-dbunch/2), self.Q_mesh)))
+            # S cut
+            S_mesh_cut = mask * self.S_mesh * np.nan_to_num( np.sqrt(1 - self.omega_mesh/(bunch[b]-dbunch/2)))
+            # dthetadQ on the mesh
+            dthetadq_pdf = np.nan_to_num(dthetadq(self.omega_mesh, E2k(bunch[b]-dbunch/2), self.Q_mesh)) * mask
+            # normalization
+            S_mesh_cut /= (S_mesh_cut * domega * dthetadq_pdf * self.dQ_vec * sintheta_mesh * dphi).sum()
 
-            P[bunch_idx==b] = S_mesh_cut[Q_idx[bunch_idx==b], omega_idx[bunch_idx==b]] * dqdtheta(omega2m[bunch_idx==b], k1m_mod[bunch_idx==b], theta2m[bunch_idx==b]) * dtheta * dphi * domega
-
+            P[bunch_idx==b] = S_mesh_cut[Q_idx[bunch_idx==b], omega_idx[bunch_idx==b]] * domega * dtheta * sintheta_mesh[Q_idx[bunch_idx==b], omega_idx[bunch_idx==b]] * dphi
+            
         # updating the weights
         w2m = w2 * P
 
