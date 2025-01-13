@@ -239,9 +239,16 @@ class MS_sim:
         #####################
         ###### Geometry #####
         #####################
-        self.mu_s = mus[0]
-        self.mu_abs = mus[1]
-        self.mu_tot = self.mu_s + self.mu_abs
+        if callable(mus[0]):
+            self.mu_s = mus[0]
+        else:
+            self.mu_s = lambda E: mus[0]
+        if callable(mus[1]):
+            self.mu_abs = mus[1]
+        else:
+            self.mu_abs = lambda E: mus[1]
+
+        self.mu_tot = lambda E: self.mu_s(E) + self.mu_abs(E)
 
         if geom[0]=='cuboid':
             self.geom_type = 'convex'
@@ -284,7 +291,7 @@ class MS_sim:
         self.Qij, self.omegaij = self.Qij.T, self.omegaij.T
 
 
-        # Useful object for plots
+        # Useful object for plotssigma.Q<16
         self.S_imshow_extent = [self.omegaj.min(),self.omegaj.max(),self.Qi.max(),self.Qi.min()]
 
         ###############################################
@@ -298,10 +305,10 @@ class MS_sim:
         ###########################
 
         # Trasmission
-        self.T_tot = lambda d: np.exp(-self.mu_tot*d)
+        self.T_tot = lambda E, d: np.exp(-self.mu_tot(E)*d)
 
         # Random scattering extraction from Lamber-Beer law
-        self.rand_LB = lambda b: truncexpon.rvs(b = b*self.mu_tot)/self.mu_tot
+        self.rand_LB = lambda E, d: truncexpon.rvs(b = d*self.mu_tot(E))/self.mu_tot(E)
 
 
 
@@ -327,13 +334,14 @@ class MS_sim:
             pass
         d1 = (ts[:,1] - ts[:,0]) + (ts[:,3] - ts[:,2])
         # weigth update
-        w1 = w0*(1-self.T_tot(d1))*self.mu_s/self.mu_tot
-        # dtp2 extraction (one for all)
-        dtp2 = self.rand_LB(d1)
+        w1 = w0*(1-self.T_tot(self.Ei,d1))*(self.mu_s(self.Ei)/self.mu_tot(self.Ei))
+        # dtp1 extraction (one for all)
+        dtp1 = self.rand_LB(self.Ei, d1)
+        T_1 = self.T_tot(self.Ei, dtp1)
         # generate void vector
-        void = np.where(dtp2<=(ts[:, 1]-ts[:, 0]), 0, ts[:,2] - ts[:,1])
+        void = np.where(dtp1<=(ts[:, 1]-ts[:, 0]), 0, ts[:,2] - ts[:,1])
 
-        p1 = line_param(ts[:,0] + dtp2 + void, p0, k0)
+        p1 = line_param(ts[:,0] + dtp1 + void, p0, k0)
 
         
         ####################################
@@ -374,11 +382,16 @@ class MS_sim:
 
         d2s = ts[:,0] + (ts[:,2] - ts[:,1])
 
+        T_2 =self.T_tot(self.Ef, d2s)
+
         ##### wfs weigth update #####
-        wfs = w1s*self.T_tot(d2s)
+        wfs = w1s*T_2
 
         ##### Intensity #####
         Is = wfs.mean()
+
+        #### T_self ####
+        T_self = np.mean(T_1*T_2)
 
 
         ####################################
@@ -417,10 +430,10 @@ class MS_sim:
             pass
 
         d2m = ts[:,0] + (ts[:,2] - ts[:,1])
-        w2 = w1m*(1-self.T_tot(d2m))*self.mu_s/self.mu_tot
+        w2 = w1m*(1-self.T_tot(E1m,d2m))*self.mu_s(E1m)/self.mu_tot(E1m)
 
         # position extraction
-        dtp2 = self.rand_LB(d2m)
+        dtp2 = self.rand_LB(E1m,d2m)
         void = np.where(dtp2<=ts[:, 0], 0,ts[:,1] - ts[:,0])
         p2 = line_param(dtp2 + void, p1, k1m)
 
@@ -481,7 +494,7 @@ class MS_sim:
             pass
 
         d3m = ts[:,0] + (ts[:,2] - ts[:,1])
-        wfm = w2m*self.T_tot(d3m)
+        wfm = w2m*self.T_tot(self.Ef,d3m)
         Im = wfm.mean()
         
 
@@ -524,6 +537,8 @@ class MS_sim:
 
         self.Is = Is
         self.Im = Im
+
+        self.T_self = T_self
         
 
 
